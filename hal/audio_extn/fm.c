@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  * Not a Contribution.
  *
  * Copyright (C) 2013 The Android Open Source Project
@@ -31,9 +31,18 @@
 #include <stdlib.h>
 #include <cutils/str_parms.h>
 
-#ifdef FM_ENABLED
+#ifdef DYNAMIC_LOG_ENABLED
+#include <log_xml_parser.h>
+#define LOG_MASK HAL_MOD_FILE_FM
+#include <log_utils.h>
+#endif
+
+#ifdef FM_POWER_OPT
 #define AUDIO_PARAMETER_KEY_HANDLE_FM "handle_fm"
 #define AUDIO_PARAMETER_KEY_FM_VOLUME "fm_volume"
+#define AUDIO_PARAMETER_KEY_REC_PLAY_CONC "rec_play_conc_on"
+#define AUDIO_PARAMETER_KEY_FM_MUTE "fm_mute"
+#define FM_LOOPBACK_DRAIN_TIME_MS 2
 
 static struct pcm_config pcm_config_fm = {
     .channels = 2,
@@ -50,9 +59,10 @@ struct fm_module {
     struct pcm *fm_pcm_rx;
     struct pcm *fm_pcm_tx;
     bool is_fm_running;
+    bool is_fm_muted;
     float fm_volume;
     bool restart_fm;
-    int scard_state;
+    card_status_t card_status;
 };
 
 static struct fm_module fmmod = {
@@ -60,11 +70,12 @@ static struct fm_module fmmod = {
   .fm_pcm_tx = NULL,
   .fm_volume = 0,
   .is_fm_running = 0,
+  .is_fm_muted = 0,
   .restart_fm = 0,
-  .scard_state = SND_CARD_STATE_ONLINE,
+  .card_status = CARD_STATUS_ONLINE,
 };
 
-static int32_t fm_set_volume(struct audio_device *adev, float value)
+static int32_t fm_set_volume(struct audio_device *adev, float value, bool persist)
 {
     int32_t vol, ret = 0;
     struct mixer_ctl *ctl;
@@ -81,7 +92,14 @@ static int32_t fm_set_volume(struct audio_device *adev, float value)
         value = 1.0;
     }
     vol  = lrint((value * 0x2000) + 0.5);
-    fmmod.fm_volume = value;
+    if (persist)
+        fmmod.fm_volume = value;
+
+    if (fmmod.is_fm_muted == true && vol > 0) {
+        ALOGD("%s: fm is muted, applying '0' volume instead of '%d'.",
+                                                        __func__, vol);
+        vol = 0;
+    }
 
     if (!fmmod.is_fm_running) {
         ALOGV("%s: FM not active, ignoring set_fm_volume call", __func__);
@@ -102,7 +120,7 @@ static int32_t fm_set_volume(struct audio_device *adev, float value)
 
 static int32_t fm_stop(struct audio_device *adev)
 {
-    int32_t i, ret = 0;
+    int32_t ret = 0;
     struct audio_usecase *uc_info;
 
     ALOGD("%s: enter", __func__);
@@ -141,7 +159,7 @@ static int32_t fm_stop(struct audio_device *adev)
 
 static int32_t fm_start(struct audio_device *adev)
 {
-    int32_t i, ret = 0;
+    int32_t ret = 0;
     struct audio_usecase *uc_info;
     int32_t pcm_dev_rx_id, pcm_dev_tx_id;
 
@@ -201,7 +219,7 @@ static int32_t fm_start(struct audio_device *adev)
     pcm_start(fmmod.fm_pcm_tx);
 
     fmmod.is_fm_running = true;
-    fm_set_volume(adev, fmmod.fm_volume);
+    fm_set_volume(adev, fmmod.fm_volume, false);
 
     ALOGD("%s: exit: status(%d)", __func__, ret);
     return 0;
@@ -224,14 +242,14 @@ void audio_extn_fm_set_parameters(struct audio_device *adev,
     if (ret >= 0) {
         char *snd_card_status = value+2;
         if (strstr(snd_card_status, "OFFLINE")) {
-            fmmod.scard_state = SND_CARD_STATE_OFFLINE;
+            fmmod.card_status = CARD_STATUS_OFFLINE;
         }
         else if (strstr(snd_card_status, "ONLINE")) {
-            fmmod.scard_state = SND_CARD_STATE_ONLINE;
+            fmmod.card_status = CARD_STATUS_ONLINE;
         }
     }
     if(fmmod.is_fm_running) {
-        if (fmmod.scard_state == SND_CARD_STATE_OFFLINE) {
+        if (fmmod.card_status == CARD_STATUS_OFFLINE) {
             ALOGD("sound card is OFFLINE, stop FM");
             fm_stop(adev);
             fmmod.restart_fm = 1;
@@ -245,7 +263,7 @@ void audio_extn_fm_set_parameters(struct audio_device *adev,
                 select_devices(adev, USECASE_AUDIO_PLAYBACK_FM);
         }
     }
-    if (fmmod.restart_fm && (fmmod.scard_state == SND_CARD_STATE_ONLINE)) {
+    if (fmmod.restart_fm && (fmmod.card_status == CARD_STATUS_ONLINE)) {
         ALOGD("sound card is ONLINE, restart FM");
         fmmod.restart_fm = 0;
         fm_start(adev);
@@ -262,8 +280,11 @@ void audio_extn_fm_set_parameters(struct audio_device *adev,
                 adev->primary_output->devices = val & ~AUDIO_DEVICE_OUT_FM;
                 fm_start(adev);
             } else if (!(val & AUDIO_DEVICE_OUT_FM)
-                     && fmmod.is_fm_running == true)
+                     && fmmod.is_fm_running == true) {
+                fm_set_volume(adev, 0, false);
+                usleep(FM_LOOPBACK_DRAIN_TIME_MS*1000);
                 fm_stop(adev);
+            }
        }
     }
 
@@ -277,10 +298,36 @@ void audio_extn_fm_set_parameters(struct audio_device *adev,
             goto exit;
         }
         ALOGD("%s: set_fm_volume usecase", __func__);
-        fm_set_volume(adev, vol);
+        fm_set_volume(adev, vol, true);
     }
 
+    ret = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_FM_MUTE,
+                            value, sizeof(value));
+    if (ret >= 0) {
+        if (value[0] == '1')
+            fmmod.is_fm_muted = true;
+        else
+            fmmod.is_fm_muted = false;
+        ALOGV("%s: set_fm_volume from param mute", __func__);
+        fm_set_volume(adev, fmmod.fm_volume, false);
+    }
+
+#ifdef RECORD_PLAY_CONCURRENCY
+    ret = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_REC_PLAY_CONC,
+                               value, sizeof(value));
+    if ((ret >= 0)
+          && (fmmod.is_fm_running == true)) {
+
+        if (!strncmp("true", value, sizeof("true")))
+            ALOGD("Record play concurrency ON Forcing FM device reroute");
+        else
+            ALOGD("Record play concurrency OFF Forcing FM device reroute");
+
+        select_devices(adev, USECASE_AUDIO_PLAYBACK_FM);
+        fm_set_volume(adev, fmmod.fm_volume, false);
+    }
+#endif
 exit:
     ALOGV("%s: exit", __func__);
 }
-#endif /* FM_ENABLED end */
+#endif /* FM_POWER_OPT end */

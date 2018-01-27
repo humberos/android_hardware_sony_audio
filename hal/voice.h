@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  * Not a contribution.
  *
  * Copyright (C) 2013 The Android Open Source Project
@@ -24,7 +24,7 @@
 #define VOICE_SESS_IDX     (BASE_SESS_IDX)
 
 #ifdef MULTI_VOICE_SESSION_ENABLED
-#define MAX_VOICE_SESSIONS 5
+#define MAX_VOICE_SESSIONS 7
 #else
 #define MAX_VOICE_SESSIONS 1
 #endif
@@ -43,6 +43,7 @@ struct str_parms;
 struct stream_in;
 struct stream_out;
 typedef int audio_usecase_t;
+typedef int snd_device_t;
 
 struct call_state {
     int current;
@@ -61,7 +62,6 @@ struct voice {
     int tty_mode;
     bool mic_mute;
     float volume;
-    bool is_in_call;
     bool in_call;
 };
 
@@ -81,8 +81,8 @@ int voice_set_parameters(struct audio_device *adev, struct str_parms *parms);
 void voice_get_parameters(struct audio_device *adev, struct str_parms *query,
                           struct str_parms *reply);
 void voice_init(struct audio_device *adev);
-bool voice_is_in_call(struct audio_device *adev);
-bool voice_is_in_call_rec_stream(struct stream_in *in);
+bool voice_is_in_call(const struct audio_device *adev);
+bool voice_is_in_call_rec_stream(const struct stream_in *in);
 int voice_set_mic_mute(struct audio_device *dev, bool state);
 bool voice_get_mic_mute(struct audio_device *dev);
 int voice_set_volume(struct audio_device *adev, float volume);
@@ -93,4 +93,12 @@ int voice_check_and_set_incall_music_usecase(struct audio_device *adev,
 int voice_check_and_stop_incall_rec_usecase(struct audio_device *adev,
                                             struct stream_in *in);
 void voice_update_devices_for_all_voice_usecases(struct audio_device *adev);
+snd_device_t voice_get_incall_rec_snd_device(snd_device_t in_snd_device);
+void voice_set_sidetone(struct audio_device *adev,
+                       snd_device_t out_snd_device,
+                       bool enable);
+void voice_check_and_update_aanc_path(struct audio_device *adev,
+                                      snd_device_t out_snd_device,
+                                      bool enable);
+bool voice_is_call_state_active(struct audio_device *adev);
 #endif //VOICE_H

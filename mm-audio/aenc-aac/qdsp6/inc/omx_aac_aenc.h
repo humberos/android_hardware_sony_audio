@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------------
-Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
+Copyright (c) 2010-2014, 2017, The Linux Foundation. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -53,6 +53,7 @@ This module contains the class definition for openMAX encoder component.
 #include "QOMX_AudioIndexExtensions.h"
 #include "OMX_Core.h"
 #include "OMX_Audio.h"
+#include "OMX_IndexExt.h"
 #include "aenc_svr.h"
 #include "qc_omx_component.h"
 #include "Map.h"
@@ -414,8 +415,8 @@ private:
         unsigned int offset_to_frame;
         unsigned int frame_size;
         unsigned int encoded_pcm_samples;
-        unsigned int msw_ts;
         unsigned int lsw_ts;
+        unsigned int msw_ts;
         unsigned int nflags;
     } __attribute__ ((packed))ENC_META_OUT;
 
@@ -457,7 +458,7 @@ private:
     unsigned int                   m_flags;      //encapsulate the waiting states.
     OMX_U64                        nTimestamp;
     OMX_U64                        ts;
-    uint32_t                       m_frame_count;
+    OMX_U64                        m_frame_count;
     unsigned int                   frameduration;
     unsigned int                   pcm_input; //tunnel or non-tunnel
     unsigned int                   m_inp_act_buf_count;    // Num of Input Buffers
@@ -579,7 +580,9 @@ private:
 
     bool release_done(OMX_U32         param1);
 
-    bool execute_omx_flush(OMX_IN OMX_U32 param1, bool cmd_cmpl=true);
+    // cmd_cmpl=false by default.OMX_EventCmdComplete not sent back to handler
+    // cmd_cmpl=true only when flush executed by OMX_CommandFlush
+    bool execute_omx_flush(OMX_IN OMX_U32 param1, bool cmd_cmpl=false);
 
     bool execute_input_omx_flush(void);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016-2017, The Linux Foundation. All rights reserved.
  * Not a contribution.
  *
  * Copyright (C) 2013 The Android Open Source Project
@@ -32,7 +32,6 @@ int voice_extn_set_parameters(struct audio_device *adev,
 void voice_extn_get_parameters(const struct audio_device *adev,
                                struct str_parms *query,
                                struct str_parms *reply);
-int voice_extn_is_in_call_rec_stream(struct stream_in *in, bool *in_call_rec);
 int voice_extn_is_call_state_active(struct audio_device *adev,
                                     bool *is_call_active);
 int voice_extn_get_active_session_id(struct audio_device *adev,
@@ -44,63 +43,58 @@ void voice_extn_out_get_parameters(struct stream_out *out,
                                    struct str_parms *query,
                                    struct str_parms *reply);
 #else
-static int voice_extn_start_call(struct audio_device *adev __unused)
+static int __unused voice_extn_start_call(struct audio_device *adev __unused)
 {
     return -ENOSYS;
 }
 
-static int voice_extn_stop_call(struct audio_device *adev __unused)
+static int __unused voice_extn_stop_call(struct audio_device *adev __unused)
 {
     return -ENOSYS;
 }
 
-static int voice_extn_get_session_from_use_case(struct audio_device *adev __unused,
+static int __unused voice_extn_get_session_from_use_case(struct audio_device *adev __unused,
                                                 const audio_usecase_t usecase_id __unused,
                                                 struct voice_session **session __unused)
 {
     return -ENOSYS;
 }
 
-static void voice_extn_init(struct audio_device *adev __unused)
+static void __unused voice_extn_init(struct audio_device *adev __unused)
 {
 }
 
-static int voice_extn_set_parameters(struct audio_device *adev __unused,
+static int __unused voice_extn_set_parameters(struct audio_device *adev __unused,
                                      struct str_parms *parms __unused)
 {
     return -ENOSYS;
 }
 
-static void voice_extn_get_parameters(const struct audio_device *adev __unused,
+static void __unused voice_extn_get_parameters(const struct audio_device *adev __unused,
                                       struct str_parms *query __unused,
                                       struct str_parms *reply __unused)
 {
 }
 
-static int voice_extn_is_call_state_active(struct audio_device *adev __unused,
+static int __unused voice_extn_is_call_state_active(struct audio_device *adev __unused,
                                            bool *is_call_active __unused)
 {
     return -ENOSYS;
 }
 
-static int voice_extn_is_in_call_rec_stream(struct stream_in *in __unused, bool *in_call_rec __unused)
-{
-    return -ENOSYS;
-}
-
-static int voice_extn_get_active_session_id(struct audio_device *adev __unused,
+static int __unused voice_extn_get_active_session_id(struct audio_device *adev __unused,
                                             uint32_t *session_id __unused)
 {
     return -ENOSYS;
 }
 
-static void voice_extn_in_get_parameters(struct stream_in *in __unused,
+static void __unused voice_extn_in_get_parameters(struct stream_in *in __unused,
                                          struct str_parms *query __unused,
                                          struct str_parms *reply __unused)
 {
 }
 
-static void voice_extn_out_get_parameters(struct stream_out *out __unused,
+static void __unused voice_extn_out_get_parameters(struct stream_out *out __unused,
                                           struct str_parms *query __unused,
                                           struct str_parms *reply __unused)
 {
@@ -111,11 +105,7 @@ static void voice_extn_out_get_parameters(struct stream_out *out __unused,
 int voice_extn_check_and_set_incall_music_usecase(struct audio_device *adev,
                                                   struct stream_out *out);
 #else
-static int voice_extn_check_and_set_incall_music_usecase(struct audio_device *adev __unused,
-                                                         struct stream_out *out __unused)
-{
-    return -ENOSYS;
-}
+#define voice_extn_check_and_set_incall_music_usecase(adev, out) -ENOSYS
 #endif
 
 #ifdef COMPRESS_VOIP_ENABLED
@@ -148,128 +138,157 @@ void voice_extn_compress_voip_in_get_parameters(struct stream_in *in,
                                                 struct str_parms *query,
                                                 struct str_parms *reply);
 bool voice_extn_compress_voip_pcm_prop_check();
-bool voice_extn_compress_voip_is_active(struct audio_device *adev);
+bool voice_extn_compress_voip_is_active(const struct audio_device *adev);
 bool voice_extn_compress_voip_is_format_supported(audio_format_t format);
 bool voice_extn_compress_voip_is_config_supported(struct audio_config *config);
+bool voice_extn_compress_voip_is_started(struct audio_device *adev);
 #else
-static int voice_extn_compress_voip_close_output_stream(struct audio_stream *stream __unused)
+static int __unused voice_extn_compress_voip_close_output_stream(
+                                     struct audio_stream *stream __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_open_output_stream(struct stream_out *out __unused)
+static int __unused voice_extn_compress_voip_open_output_stream(
+                                         struct stream_out *out __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_close_input_stream(struct audio_stream *stream __unused)
+static int __unused voice_extn_compress_voip_close_input_stream(
+                                    struct audio_stream *stream __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_open_input_stream(struct stream_in *in __unused)
+static int __unused voice_extn_compress_voip_open_input_stream(
+                                          struct stream_in *in __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_out_get_buffer_size(struct stream_out *stream __unused)
+static int __unused voice_extn_compress_voip_out_get_buffer_size(
+                                       struct stream_out *stream __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_in_get_buffer_size(struct stream_in *in __unused)
+static int __unused voice_extn_compress_voip_in_get_buffer_size(
+                                           struct stream_in *in __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_start_input_stream(struct stream_in *in __unused)
+static int __unused voice_extn_compress_voip_start_input_stream(
+                                           struct stream_in *in __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_start_output_stream(struct stream_out *out __unused)
+static int __unused voice_extn_compress_voip_start_output_stream(
+                                          struct stream_out *out __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_set_mic_mute(struct audio_device *adev, bool state __unused)
+static int __unused voice_extn_compress_voip_set_mic_mute(
+                                struct audio_device *adev __unused,
+                                bool state __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return 0;
 }
 
-static int voice_extn_compress_voip_set_volume(struct audio_device *adev __unused, float volume __unused)
+static int __unused voice_extn_compress_voip_set_volume(
+                              struct audio_device *adev __unused,
+                              float volume __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return 0;
 }
 
-static int voice_extn_compress_voip_select_devices(struct audio_device *adev __unused,
-                                                   snd_device_t *out_snd_device __unused,
-                                                   snd_device_t *in_snd_device __unused)
+static int __unused voice_extn_compress_voip_select_devices(
+                                  struct audio_device *adev __unused,
+                                  snd_device_t *out_snd_device __unused,
+                                  snd_device_t *in_snd_device __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static int voice_extn_compress_voip_set_parameters(struct audio_device *adev __unused,
-                                                    struct str_parms *parms __unused)
+static int __unused voice_extn_compress_voip_set_parameters(
+                                  struct audio_device *adev __unused,
+                                  struct str_parms *parms __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return -ENOSYS;
 }
 
-static void voice_extn_compress_voip_get_parameters(struct str_parms *query __unused,
-                                                    struct str_parms *reply __unused)
+static void __unused voice_extn_compress_voip_get_parameters(
+                                     struct str_parms *query __unused,
+                                     struct str_parms *reply __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
 }
 
-static void voice_extn_compress_voip_out_get_parameters(struct stream_out *out __unused,
-                                                        struct str_parms *query __unused,
-                                                        struct str_parms *reply __unused)
+static void __unused voice_extn_compress_voip_out_get_parameters(
+                                          struct stream_out *out __unused,
+                                          struct str_parms *query __unused,
+                                          struct str_parms *reply __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
 }
 
-static void voice_extn_compress_voip_in_get_parameters(struct stream_in *in __unused,
-                                                       struct str_parms *query __unused,
-                                                       struct str_parms *reply __unused)
+static void __unused voice_extn_compress_voip_in_get_parameters(
+                                           struct stream_in *in __unused,
+                                           struct str_parms *query __unused,
+                                           struct str_parms *reply __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
 }
 
-static bool voice_extn_compress_voip_pcm_prop_check()
+static bool __unused voice_extn_compress_voip_pcm_prop_check()
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return false;
 }
 
-static bool voice_extn_compress_voip_is_active(struct audio_device *adev __unused)
+static bool __unused  voice_extn_compress_voip_is_active(
+                         const struct audio_device *adev __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return false;
 }
 
-static bool voice_extn_compress_voip_is_format_supported(audio_format_t format __unused)
+static bool __unused voice_extn_compress_voip_is_format_supported(
+                                            audio_format_t format __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return true;
 }
 
-static bool voice_extn_compress_voip_is_config_supported(struct audio_config *config __unused)
+static bool __unused voice_extn_compress_voip_is_config_supported(
+                                      struct audio_config *config __unused)
 {
     ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
     return true;
 }
+
+static bool __unused voice_extn_compress_voip_is_started(
+                               struct audio_device *adev __unused)
+{
+    ALOGE("%s: COMPRESS_VOIP_ENABLED is not defined", __func__);
+    return false;
+}
+
 #endif
 
 #endif //VOICE_EXTN_H

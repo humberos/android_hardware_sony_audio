@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -39,6 +39,11 @@
 #include "platform.h"
 #include "platform_api.h"
 
+#ifdef DYNAMIC_LOG_ENABLED
+#include <log_xml_parser.h>
+#define LOG_MASK HAL_MOD_FILE_HW_INFO
+#include <log_utils.h>
+#endif
 
 struct hardware_info {
     char name[HW_INFO_ARRAY_MAX_SIZE];
@@ -47,159 +52,136 @@ struct hardware_info {
     uint32_t num_snd_devices;
     char dev_extn[HW_INFO_ARRAY_MAX_SIZE];
     snd_device_t  *snd_devices;
+    bool is_wsa_combo_suppported;
+    bool is_stereo_spkr;
 };
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define WSA_MIXER_PATH_EXTENSION "wsa-"
 
-static const snd_device_t taiko_fluid_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
+static const snd_device_t wsa_combo_devices[] = {
     SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET,
-};
-
-static const snd_device_t taiko_CDP_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET,
-    SND_DEVICE_IN_QUAD_MIC,
-};
-
-static const snd_device_t taiko_apq8084_CDP_variant_devices[] = {
-    SND_DEVICE_IN_HANDSET_MIC,
-};
-
-static const snd_device_t taiko_liquid_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET,
-    SND_DEVICE_IN_SPEAKER_MIC,
-    SND_DEVICE_IN_HEADSET_MIC,
-    SND_DEVICE_IN_VOICE_DMIC,
-    SND_DEVICE_IN_VOICE_SPEAKER_DMIC,
-    SND_DEVICE_IN_VOICE_REC_DMIC_STEREO,
-    SND_DEVICE_IN_VOICE_REC_DMIC_FLUENCE,
-    SND_DEVICE_IN_QUAD_MIC,
-    SND_DEVICE_IN_HANDSET_STEREO_DMIC,
-    SND_DEVICE_IN_SPEAKER_STEREO_DMIC,
-};
-
-static const snd_device_t taiko_DB_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET,
-    SND_DEVICE_IN_SPEAKER_MIC,
-    SND_DEVICE_IN_HEADSET_MIC,
-    SND_DEVICE_IN_QUAD_MIC,
-};
-
-static const snd_device_t tapan_lite_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_VOICE_HEADPHONES,
-    SND_DEVICE_OUT_VOICE_TTY_FULL_HEADPHONES,
-    SND_DEVICE_OUT_VOICE_TTY_VCO_HEADPHONES,
-};
-
-static const snd_device_t tapan_skuf_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET,
-    /*SND_DEVICE_OUT_SPEAKER_AND_ANC_FB_HEADSET,*/
-};
-
-static const snd_device_t tapan_lite_skuf_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_VOICE_HEADPHONES,
-    SND_DEVICE_OUT_VOICE_TTY_FULL_HEADPHONES,
-    SND_DEVICE_OUT_VOICE_TTY_VCO_HEADPHONES,
-};
-
-static const snd_device_t helicon_skuab_variant_devices[] = {
-    SND_DEVICE_OUT_SPEAKER,
-    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES,
-    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET,
+    SND_DEVICE_OUT_SPEAKER_AND_LINE,
+    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES_EXTERNAL_1,
+    SND_DEVICE_OUT_SPEAKER_AND_HEADPHONES_EXTERNAL_2,
+    SND_DEVICE_OUT_SPEAKER_AND_ANC_HEADSET
 };
 
 static void update_hardware_info_8x16(struct hardware_info *hw_info, const char *snd_card_name)
 {
     if (!strcmp(snd_card_name, "msm8x16-snd-card")) {
-        strlcpy(hw_info->type, "", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8x16", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8x16-snd-card-mtp")) {
-        strlcpy(hw_info->type, "", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8x16", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
+    } else if (!strcmp(snd_card_name, "msm8x16-snd-card-sbc")) {
+        strlcpy(hw_info->type, "sbc", sizeof(hw_info->type));
+        strlcpy(hw_info->name, "msm8x16", sizeof(hw_info->name));
     } else if (!strcmp(snd_card_name, "msm8x16-skuh-snd-card")) {
         strlcpy(hw_info->type, "skuh", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8x16", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8x16-skui-snd-card")) {
         strlcpy(hw_info->type, "skui", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8x16", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8x16-skuhf-snd-card")) {
         strlcpy(hw_info->type, "skuhf", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8x16", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8939-snd-card")) {
-        strlcpy(hw_info->type, "", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8939", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8939-snd-card-mtp")) {
-        strlcpy(hw_info->type, "", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8939", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8939-snd-card-skuk")) {
         strlcpy(hw_info->type, "skuk", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8939", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8939-tapan-snd-card") ||
                !strcmp(snd_card_name, "msm8939-tapan9302-snd-card")) {
-        strlcpy(hw_info->type, "", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8939", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8909-snd-card")) {
-        strlcpy(hw_info->type, "", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8909-skua-snd-card")) {
         strlcpy(hw_info->type, "skua", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
     } else if (!strcmp(snd_card_name, "msm8909-skuc-snd-card")) {
         strlcpy(hw_info->type, "skuc", sizeof(hw_info->type));
         strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
-        hw_info->snd_devices = NULL;
-        hw_info->num_snd_devices = 0;
-        strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
+    } else if (!strcmp(snd_card_name, "msm8909-pm8916-snd-card")) {
+        strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8909-skue-snd-card")) {
+        strlcpy(hw_info->type, "skue", sizeof(hw_info->type));
+        strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8909-skut-snd-card")) {
+        strlcpy(hw_info->type, "skut", sizeof(hw_info->type));
+        strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8939-snd-card-skul")) {
+        strlcpy(hw_info->type, "skul", sizeof(hw_info->type));
+        strlcpy(hw_info->name, "msm8939", sizeof(hw_info->name));
+    }  else if (!strcmp(snd_card_name, "msm8952-snd-card")) {
+        strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8952-snd-card-mtp")) {
+        strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8952-tomtom-snd-card")) {
+        strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8952-tasha-snd-card")) {
+        strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8952-tashalite-snd-card")) {
+       strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+    }  else if (!strcmp(snd_card_name, "msm8952-skum-snd-card")) {
+        strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8952-sku1-snd-card")) {
+        strlcpy(hw_info->name, "msm8937", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8952-sku2-snd-card")) {
+        strlcpy(hw_info->name, "msm8937", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8976-tasha-snd-card")) {
+        strlcpy(hw_info->name, "msm8976", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8976-tashalite-snd-card")) {
+       strlcpy(hw_info->name, "msm8976", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8976-tapan-snd-card")) {
+        strlcpy(hw_info->name, "msm8976", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8953-snd-card-mtp")) {
+        strlcpy(hw_info->name, "msm8953", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8953-sku3-tasha-snd-card")) {
+        strlcpy(hw_info->name, "msm8953", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8953-tasha-snd-card")) {
+        strlcpy(hw_info->name, "msm8953", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8953-tashalite-snd-card")) {
+        strlcpy(hw_info->name, "msm8953", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8952-sku3-tasha-snd-card")) {
+       strlcpy(hw_info->name, "msm8952", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8937-snd-card-mtp")) {
+        strlcpy(hw_info->name, "msm8937", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8937-tasha-snd-card")) {
+        strlcpy(hw_info->name, "msm8937", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8937-tashalite-snd-card")) {
+        strlcpy(hw_info->name, "msm8937", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8917-sku5-snd-card")) {
+        strlcpy(hw_info->name, "msm8917", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8917-tmo-snd-card")) {
+        strlcpy(hw_info->name, "msm8917", sizeof(hw_info->name));
+     } else if (!strcmp(snd_card_name, "msm8940-sku6-snd-card")) {
+        strlcpy(hw_info->name, "msm8940", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "sdm660-snd-card")) {
+        strlcpy(hw_info->name, "sdm660", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "sdm660-snd-card-mtp")) {
+        strlcpy(hw_info->name, "sdm660", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "sdm660-tavil-snd-card")) {
+        strlcpy(hw_info->name, "sdm660", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "sdm660-tasha-skus-snd-card")) {
+        hw_info->is_stereo_spkr = false;
+        strlcpy(hw_info->name, "sdm660", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "sdm660-snd-card-skush")) {
+        strlcpy(hw_info->name, "sdm660", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8920-sku7-snd-card")) {
+        strlcpy(hw_info->name, "msm8920", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "apq8009-tashalite-snd-card")) {
+        strlcpy(hw_info->name, "apq8009", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "mdm9607-tomtom-i2s-snd-card")) {
+        strlcpy(hw_info->name, "mdm9607", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "mdm-tasha-i2s-snd-card")) {
+        strlcpy(hw_info->name, "mdm-tasha", sizeof(hw_info->name));
+    } else if (!strcmp(snd_card_name, "msm8909-skuq-snd-card")) {
+        strlcpy(hw_info->type, "skuq", sizeof(hw_info->type));
+        strlcpy(hw_info->name, "msm8909", sizeof(hw_info->name));
     } else {
-        ALOGW("%s: Not an  8x16/8939/8909 device", __func__);
+        ALOGW("%s: Not an 8x16/8909/8917/8920/8937/8939/8940/8952/8953/660 device", __func__);
     }
 }
 
@@ -208,9 +190,26 @@ void *hw_info_init(const char *snd_card_name)
     struct hardware_info *hw_info;
 
     hw_info = malloc(sizeof(struct hardware_info));
+    if (!hw_info) {
+        ALOGE("failed to allocate mem for hardware info");
+        return NULL;
+    }
 
+    strlcpy(hw_info->type, "", sizeof(hw_info->type));
+    strlcpy(hw_info->name, "", sizeof(hw_info->name));
+    hw_info->snd_devices = NULL;
+    hw_info->num_snd_devices = 0;
+    strlcpy(hw_info->dev_extn, "", sizeof(hw_info->dev_extn));
+    hw_info->is_wsa_combo_suppported = false;
+
+    hw_info->is_stereo_spkr = true;
     if (strstr(snd_card_name, "msm8x16") || strstr(snd_card_name, "msm8939") ||
-        strstr(snd_card_name, "msm8909")) {
+        strstr(snd_card_name, "msm8909") || strstr(snd_card_name, "msm8952") ||
+        strstr(snd_card_name, "msm8976") || strstr(snd_card_name, "msm8953") ||
+        strstr(snd_card_name, "msm8937") || strstr(snd_card_name, "msm8917") ||
+        strstr(snd_card_name, "msm8940") || strstr(snd_card_name, "msm8920") ||
+        strstr(snd_card_name, "sdm660") || strstr(snd_card_name, "apq8009") ||
+        strstr(snd_card_name, "mdm9607") || strstr(snd_card_name, "mdm-tasha")) {
         ALOGV("8x16 - variant soundcard");
         update_hardware_info_8x16(hw_info, snd_card_name);
     } else {
@@ -226,8 +225,19 @@ void hw_info_deinit(void *hw_info)
 {
     struct hardware_info *my_data = (struct hardware_info*) hw_info;
 
-    if(!my_data)
+    if(my_data != NULL)
         free(my_data);
+}
+
+void hw_info_enable_wsa_combo_usecase_support(void *hw_info)
+{
+    struct hardware_info *my_data = (struct hardware_info*) hw_info;
+    if(!my_data) {
+        ALOGE(" ERROR wsa combo update is called with invalid hw_info");
+        return;
+    }
+    my_data->is_wsa_combo_suppported = true;
+
 }
 
 void hw_info_append_hw_type(void *hw_info, snd_device_t snd_device,
@@ -236,8 +246,30 @@ void hw_info_append_hw_type(void *hw_info, snd_device_t snd_device,
     struct hardware_info *my_data = (struct hardware_info*) hw_info;
     uint32_t i = 0;
 
+    if(!my_data) {
+        ALOGE(" ERROR hw_info_append_hw_type is called with invalid hw_info");
+        return;
+    }
+
     snd_device_t *snd_devices =
             (snd_device_t *) my_data->snd_devices;
+
+
+    if(my_data->is_wsa_combo_suppported) {
+        for (i = 0; i < ARRAY_SIZE(wsa_combo_devices) ; i++) {
+            if (snd_device == (snd_device_t)wsa_combo_devices[i]) {
+                char mixer_device_name[DEVICE_NAME_MAX_SIZE] = {0};
+                ALOGD("appending wsa extension to device %s",
+                        device_name);
+               strlcpy(mixer_device_name, WSA_MIXER_PATH_EXTENSION,
+                        sizeof(WSA_MIXER_PATH_EXTENSION)) ;
+                strlcat(mixer_device_name, device_name, DEVICE_NAME_MAX_SIZE);
+                strlcpy(device_name, mixer_device_name, DEVICE_NAME_MAX_SIZE-1);
+                break;
+            }
+        }
+    }
+
 
     if(snd_devices != NULL) {
         for (i = 0; i <  my_data->num_snd_devices; i++) {
@@ -251,4 +283,11 @@ void hw_info_append_hw_type(void *hw_info, snd_device_t snd_device,
         }
     }
     ALOGD("%s : device_name = %s", __func__,device_name);
+}
+
+bool hw_info_is_stereo_spkr(void *hw_info)
+{
+    struct hardware_info *my_data = (struct hardware_info*) hw_info;
+
+    return my_data->is_stereo_spkr;
 }

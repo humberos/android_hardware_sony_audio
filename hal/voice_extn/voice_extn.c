@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  * Not a contribution.
  *
  * Copyright (C) 2013 The Android Open Source Project
@@ -22,6 +22,7 @@
 #define LOG_NDDEBUG 0
 
 #include <errno.h>
+#include <stdlib.h>
 #include <math.h>
 #include <cutils/log.h>
 #include <cutils/str_parms.h>
@@ -34,27 +35,37 @@
 #include "platform_api.h"
 #include "voice_extn.h"
 
+#ifdef DYNAMIC_LOG_ENABLED
+#include <log_xml_parser.h>
+#define LOG_MASK HAL_MOD_FILE_VOICE_EXTN
+#include <log_utils.h>
+#endif
+
 #define AUDIO_PARAMETER_KEY_VSID                "vsid"
 #define AUDIO_PARAMETER_KEY_CALL_STATE          "call_state"
 #define AUDIO_PARAMETER_KEY_AUDIO_MODE          "audio_mode"
 #define AUDIO_PARAMETER_KEY_ALL_CALL_STATES     "all_call_states"
 #define AUDIO_PARAMETER_KEY_DEVICE_MUTE         "device_mute"
 #define AUDIO_PARAMETER_KEY_DIRECTION           "direction"
-#define AUDIO_PARAMETER_KEY_IN_CALL             "in_call"
+#define AUDIO_PARAMETER_KEY_CALL_TYPE           "call_type"
 
 #define VOICE_EXTN_PARAMETER_VALUE_MAX_LEN 256
 
-#define VOICE2_VSID 0x10DC1000
-#define VOLTE_VSID  0x10C02000
-#define QCHAT_VSID  0x10803000
-#define VOWLAN_VSID 0x10002000
-#define ALL_VSID    0xFFFFFFFF
+#define VOICE2_VSID              0x10DC1000
+#define VOLTE_VSID               0x10C02000
+#define QCHAT_VSID               0x10803000
+#define VOWLAN_VSID              0x10002000
+#define VOICEMMODE1_VSID         0x11C05000
+#define VOICEMMODE2_VSID         0x11DC5000
+#define ALL_VSID                 0xFFFFFFFF
 
 /* Voice Session Indices */
 #define VOICE2_SESS_IDX    (VOICE_SESS_IDX + 1)
 #define VOLTE_SESS_IDX     (VOICE_SESS_IDX + 2)
 #define QCHAT_SESS_IDX     (VOICE_SESS_IDX + 3)
 #define VOWLAN_SESS_IDX    (VOICE_SESS_IDX + 4)
+#define MMODE1_SESS_IDX    (VOICE_SESS_IDX + 5)
+#define MMODE2_SESS_IDX    (VOICE_SESS_IDX + 6)
 
 /* Call States */
 #define CALL_HOLD           (BASE_CALL_STATE + 2)
@@ -87,6 +98,8 @@ static bool is_valid_vsid(uint32_t vsid)
         vsid == VOICE2_VSID ||
         vsid == VOLTE_VSID ||
         vsid == QCHAT_VSID ||
+        vsid == VOICEMMODE1_VSID ||
+        vsid == VOICEMMODE2_VSID ||
         vsid == VOWLAN_VSID)
         return true;
     else
@@ -116,6 +129,14 @@ static audio_usecase_t voice_extn_get_usecase_for_session_idx(const int index)
 
     case VOWLAN_SESS_IDX:
         usecase_id = USECASE_VOWLAN_CALL;
+        break;
+
+    case MMODE1_SESS_IDX:
+        usecase_id = USECASE_VOICEMMODE1_CALL;
+        break;
+
+    case MMODE2_SESS_IDX:
+        usecase_id = USECASE_VOICEMMODE2_CALL;
         break;
 
     default:
@@ -149,7 +170,6 @@ static int update_calls(struct audio_device *adev)
     audio_usecase_t usecase_id = 0;
     enum voice_lch_mode lch_mode;
     struct voice_session *session = NULL;
-    int fd = 0;
     int ret = 0;
 
     ALOGD("%s: enter:", __func__);
@@ -339,19 +359,6 @@ int voice_extn_is_call_state_active(struct audio_device *adev, bool *is_call_act
     return 0;
 }
 
-int voice_extn_is_in_call_rec_stream(struct stream_in *in, bool *in_call_rec)
-{
-    *in_call_rec = false;
-
-    if(in->source == AUDIO_SOURCE_VOICE_DOWNLINK ||
-       in->source == AUDIO_SOURCE_VOICE_UPLINK ||
-       in->source == AUDIO_SOURCE_VOICE_CALL) {
-       *in_call_rec = true;
-    }
-
-    return 0;
-}
-
 void voice_extn_init(struct audio_device *adev)
 {
     adev->voice.session[VOICE_SESS_IDX].vsid =  VOICE_VSID;
@@ -359,6 +366,8 @@ void voice_extn_init(struct audio_device *adev)
     adev->voice.session[VOLTE_SESS_IDX].vsid =  VOLTE_VSID;
     adev->voice.session[QCHAT_SESS_IDX].vsid =  QCHAT_VSID;
     adev->voice.session[VOWLAN_SESS_IDX].vsid = VOWLAN_VSID;
+    adev->voice.session[MMODE1_SESS_IDX].vsid = VOICEMMODE1_VSID;
+    adev->voice.session[MMODE2_SESS_IDX].vsid = VOICEMMODE2_VSID;
 }
 
 int voice_extn_get_session_from_use_case(struct audio_device *adev,
@@ -386,6 +395,14 @@ int voice_extn_get_session_from_use_case(struct audio_device *adev,
 
     case USECASE_VOWLAN_CALL:
         *session = &adev->voice.session[VOWLAN_SESS_IDX];
+        break;
+
+    case USECASE_VOICEMMODE1_CALL:
+        *session = &adev->voice.session[MMODE1_SESS_IDX];
+        break;
+
+    case USECASE_VOICEMMODE2_CALL:
+        *session = &adev->voice.session[MMODE2_SESS_IDX];
         break;
 
     default:
@@ -418,22 +435,18 @@ int voice_extn_stop_call(struct audio_device *adev)
      * set routing with device BT A2DP profile. Hence end all voice calls when
      * set_mode(AUDIO_MODE_NORMAL) before BT A2DP profile is selected.
      */
-    if (adev->mode == AUDIO_MODE_NORMAL) {
-        ALOGD("%s: end all calls", __func__);
-        for (i = 0; i < MAX_VOICE_SESSIONS; i++) {
-            adev->voice.session[i].state.new = CALL_INACTIVE;
-        }
-
-        ret = update_calls(adev);
+    ALOGD("%s: end all calls", __func__);
+    for (i = 0; i < MAX_VOICE_SESSIONS; i++) {
+        adev->voice.session[i].state.new = CALL_INACTIVE;
     }
 
+    ret = update_calls(adev);
     return ret;
 }
 
 int voice_extn_set_parameters(struct audio_device *adev,
                               struct str_parms *parms)
 {
-    char *str;
     int value;
     int ret = 0, err;
     char *kv_pairs = str_parms_to_str(parms);
@@ -494,13 +507,18 @@ int voice_extn_set_parameters(struct audio_device *adev,
         }
     }
 
-    err = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_IN_CALL, str_value,
+    err = str_parms_get_str(parms, AUDIO_PARAMETER_KEY_CALL_TYPE, str_value,
                             sizeof(str_value));
     if (err >= 0) {
-          str_parms_del(parms, AUDIO_PARAMETER_KEY_IN_CALL);
-           if (!strncmp("true", str_value, sizeof("true"))) {
-           adev->voice.is_in_call = true;
-        }
+          str_parms_del(parms, AUDIO_PARAMETER_KEY_CALL_TYPE);
+          ALOGD("%s: call type is %s",__func__,str_value);
+
+           /* Expected call types are CDMA/GSM/WCDMA/LTE/TDSDMA/WLAN/UNKNOWN */
+           if (!strncmp("GSM", str_value, sizeof("GSM"))) {
+               platform_set_gsm_mode(adev->platform, true);
+           } else {
+               platform_set_gsm_mode(adev->platform, false);
+           }
     }
 
 done:
@@ -534,18 +552,9 @@ void voice_extn_get_parameters(const struct audio_device *adev,
     int ret;
     char value[VOICE_EXTN_PARAMETER_VALUE_MAX_LEN] = {0};
     char *str = str_parms_to_str(query);
-    int val = 0;
 
     ALOGV_IF(str != NULL, "%s: enter %s", __func__, str);
     free(str);
-
-    ret = str_parms_get_str(query, AUDIO_PARAMETER_KEY_IN_CALL, value,
-                            sizeof(value));
-    if (ret >=0) {
-        if (adev->voice.is_in_call)
-            val = 1;
-        str_parms_add_int(reply, AUDIO_PARAMETER_KEY_IN_CALL, val);
-    }
 
     ret = str_parms_get_str(query, AUDIO_PARAMETER_KEY_AUDIO_MODE, value,
                             sizeof(value));

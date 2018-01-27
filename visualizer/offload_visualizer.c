@@ -22,6 +22,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/prctl.h>
+#include <dlfcn.h>
 
 #include <cutils/list.h>
 #include <cutils/log.h>
@@ -29,6 +30,15 @@
 #include <tinyalsa/asoundlib.h>
 #include <audio_effects/effect_visualizer.h>
 
+#define LIB_ACDB_LOADER "libacdbloader.so"
+#define ACDB_DEV_TYPE_OUT 1
+#define AFE_PROXY_ACDB_ID 45
+
+static void* acdb_handle;
+
+typedef void (*acdb_send_audio_cal_t)(int, int);
+
+acdb_send_audio_cal_t acdb_send_audio_cal;
 
 enum {
     EFFECT_STATE_UNINITIALIZED,
@@ -169,7 +179,10 @@ int thread_status;
 
 #define MIXER_CARD 0
 #define SOUND_CARD 0
+
+#ifndef CAPTURE_DEVICE
 #define CAPTURE_DEVICE 8
+#endif
 
 /* Proxy port supports only MMAP read and those fixed parameters*/
 #define AUDIO_CAPTURE_CHANNEL_COUNT 2
@@ -290,17 +303,40 @@ bool effects_enabled() {
     return false;
 }
 
-int configure_proxy_capture(struct mixer *mixer, int value) {
-    const char *proxy_ctl_name = "AFE_PCM_RX Audio Mixer MultiMedia4";
+int set_control(const char* name, struct mixer *mixer, int value) {
     struct mixer_ctl *ctl;
 
-    ctl = mixer_get_ctl_by_name(mixer, proxy_ctl_name);
+    ctl = mixer_get_ctl_by_name(mixer, name);
     if (ctl == NULL) {
-        ALOGW("%s: could not get %s ctl", __func__, proxy_ctl_name);
+        ALOGW("%s: could not get %s ctl", __func__, name);
         return -EINVAL;
     }
-    if (mixer_ctl_set_value(ctl, 0, value) != 0)
-        ALOGW("%s: error setting value %d on %s ", __func__, value, proxy_ctl_name);
+    if (mixer_ctl_set_value(ctl, 0, value) != 0) {
+        ALOGW("%s: error setting value %d on %s ", __func__, value, name);
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+int configure_proxy_capture(struct mixer *mixer, int value) {
+    int retval = 0;
+
+    if (value && acdb_send_audio_cal)
+        acdb_send_audio_cal(AFE_PROXY_ACDB_ID, ACDB_DEV_TYPE_OUT);
+
+    retval = set_control("AFE_PCM_RX Audio Mixer MultiMedia4", mixer, value);
+
+    if (retval != 0)
+        return retval;
+
+    // Extending visualizer to capture for compress2 path as well.
+    // for extending it to multiple offload either this needs to be extended
+    // or need to find better solution to enable only active offload sessions
+
+    retval = set_control("AFE_PCM_RX Audio Mixer MultiMedia7", mixer, value);
+    if (retval != 0)
+        return retval;
 
     return 0;
 }
@@ -414,7 +450,7 @@ void *capture_thread_loop(void *arg)
 
 __attribute__ ((visibility ("default")))
 int visualizer_hal_start_output(audio_io_handle_t output, int pcm_id) {
-    int ret;
+    int ret = 0;
     struct listnode *node;
 
     ALOGV("%s output %d pcm_id %d", __func__, output, pcm_id);
@@ -465,7 +501,7 @@ exit:
 
 __attribute__ ((visibility ("default")))
 int visualizer_hal_stop_output(audio_io_handle_t output, int pcm_id) {
-    int ret;
+    int ret = 0;
     struct listnode *node;
     struct listnode *fx_node;
     output_context_t *out_ctxt;
@@ -523,7 +559,6 @@ int set_config(effect_context_t *context, effect_config_t *config)
     if (config->inputCfg.samplingRate != config->outputCfg.samplingRate) return -EINVAL;
     if (config->inputCfg.channels != config->outputCfg.channels) return -EINVAL;
     if (config->inputCfg.format != config->outputCfg.format) return -EINVAL;
-    if (config->inputCfg.channels != AUDIO_CHANNEL_OUT_STEREO) return -EINVAL;
     if (config->outputCfg.accessMode != EFFECT_BUFFER_ACCESS_WRITE &&
             config->outputCfg.accessMode != EFFECT_BUFFER_ACCESS_ACCUMULATE) return -EINVAL;
     if (config->inputCfg.format != AUDIO_FORMAT_PCM_16_BIT) return -EINVAL;
@@ -613,6 +648,19 @@ int visualizer_init(effect_context_t *context)
     }
 
     set_config(context, &context->config);
+
+    if (acdb_handle == NULL) {
+        acdb_handle = dlopen(LIB_ACDB_LOADER, RTLD_NOW);
+        if (acdb_handle == NULL) {
+            ALOGE("%s: DLOPEN failed for %s", __func__, LIB_ACDB_LOADER);
+        } else {
+            acdb_send_audio_cal = (acdb_send_audio_cal_t)dlsym(acdb_handle,
+                                                    "acdb_loader_send_audio_cal");
+            if (!acdb_send_audio_cal)
+                ALOGE("%s: Could not find the symbol acdb_send_audio_cal from %s",
+                      __func__, LIB_ACDB_LOADER);
+            }
+    }
 
     return 0;
 }
@@ -846,6 +894,18 @@ int visualizer_command(effect_context_t * context, uint32_t cmdCode, uint32_t cm
         break;
 
     case VISUALIZER_CMD_MEASURE: {
+        if (pReplyData == NULL || replySize == NULL ||
+                *replySize < (sizeof(int32_t) * MEASUREMENT_COUNT)) {
+            if (replySize == NULL) {
+                ALOGV("%s VISUALIZER_CMD_MEASURE error replySize NULL", __func__);
+            } else {
+                ALOGV("%s VISUALIZER_CMD_MEASURE error *replySize %u <"
+                        "(sizeof(int32_t) * MEASUREMENT_COUNT) %zu",
+                        __func__, *replySize, sizeof(int32_t) * MEASUREMENT_COUNT);
+            }
+            android_errorWriteLog(0x534e4554, "30229821");
+            return -EINVAL;
+        }
         uint16_t peak_u16 = 0;
         float sum_rms_squared = 0.0f;
         uint8_t nb_valid_meas = 0;

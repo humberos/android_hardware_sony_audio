@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, 2016-2017 The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -30,6 +30,7 @@
 /* #define LOG_NDEBUG 0 */
 #define LOG_NDDEBUG 0
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <dlfcn.h>
@@ -40,8 +41,15 @@
 #include "platform_api.h"
 #include "sound_trigger_prop_intf.h"
 
+#ifdef DYNAMIC_LOG_ENABLED
+#include <log_xml_parser.h>
+#define LOG_MASK HAL_MOD_FILE_SND_TRIGGER
+#include <log_utils.h>
+#endif
+
 #define XSTR(x) STR(x)
 #define STR(x) #x
+#define MAX_LIBRARY_PATH 100
 
 struct sound_trigger_info  {
     struct sound_trigger_session_info st_ses;
@@ -59,12 +67,27 @@ struct sound_trigger_audio_device {
 
 static struct sound_trigger_audio_device *st_dev;
 
+#if LINUX_ENABLED
+static void get_library_path(char *lib_path)
+{
+    snprintf(lib_path, MAX_LIBRARY_PATH,
+             "/usr/lib/sound_trigger.primary.default.so");
+}
+#else
+static void get_library_path(char *lib_path)
+{
+    snprintf(lib_path, MAX_LIBRARY_PATH,
+             "/vendor/lib/hw/sound_trigger.primary.%s.so",
+             XSTR(SOUND_TRIGGER_PLATFORM_NAME));
+}
+#endif
+
 static struct sound_trigger_info *
 get_sound_trigger_info(int capture_handle)
 {
     struct sound_trigger_info  *st_ses_info = NULL;
     struct listnode *node;
-    ALOGD("%s: list %d capture_handle %d", __func__,
+    ALOGV("%s: list empty %d capture_handle %d", __func__,
            list_empty(&st_dev->st_ses_list), capture_handle);
     list_for_each(node, &st_dev->st_ses_list) {
         st_ses_info = node_to_item(node, struct sound_trigger_info , list);
@@ -72,6 +95,15 @@ get_sound_trigger_info(int capture_handle)
             return st_ses_info;
     }
     return NULL;
+}
+
+static void stdev_snd_mon_cb(void * stream __unused, struct str_parms * parms)
+{
+    if (!parms)
+        return;
+
+    audio_extn_sound_trigger_set_parameters(NULL, parms);
+    return;
 }
 
 int audio_hw_call_back(sound_trigger_event_type_t event,
@@ -97,9 +129,9 @@ int audio_hw_call_back(sound_trigger_event_type_t event,
             status = -ENOMEM;
             break;
         }
-        memcpy(&st_ses_info->st_ses, &config->st_ses, sizeof (config->st_ses));
-        ALOGV("%s: add capture_handle %d pcm %p", __func__,
-              st_ses_info->st_ses.capture_handle, st_ses_info->st_ses.pcm);
+        memcpy(&st_ses_info->st_ses, &config->st_ses, sizeof (struct sound_trigger_session_info));
+        ALOGV("%s: add capture_handle %d st session opaque ptr %p", __func__,
+              st_ses_info->st_ses.capture_handle, st_ses_info->st_ses.p_ses);
         list_add_tail(&st_dev->st_ses_list, &st_ses_info->list);
         break;
 
@@ -111,12 +143,12 @@ int audio_hw_call_back(sound_trigger_event_type_t event,
         }
         st_ses_info = get_sound_trigger_info(config->st_ses.capture_handle);
         if (!st_ses_info) {
-            ALOGE("%s: pcm %p not in the list!", __func__, config->st_ses.pcm);
+            ALOGE("%s: st session opaque ptr %p not in the list!", __func__, config->st_ses.p_ses);
             status = -EINVAL;
             break;
         }
-        ALOGV("%s: remove capture_handle %d pcm %p", __func__,
-              st_ses_info->st_ses.capture_handle, st_ses_info->st_ses.pcm);
+        ALOGV("%s: remove capture_handle %d st session opaque ptr %p", __func__,
+              st_ses_info->st_ses.capture_handle, st_ses_info->st_ses.p_ses);
         list_remove(&st_ses_info->list);
         free(st_ses_info);
         break;
@@ -128,13 +160,51 @@ int audio_hw_call_back(sound_trigger_event_type_t event,
     return status;
 }
 
+int audio_extn_sound_trigger_read(struct stream_in *in, void *buffer,
+                       size_t bytes)
+{
+    int ret = -1;
+    struct sound_trigger_info  *st_info = NULL;
+    audio_event_info_t event;
+
+    if (!st_dev)
+       return ret;
+
+    if (!in->is_st_session_active) {
+        ALOGE(" %s: Sound trigger is not active", __func__);
+        goto exit;
+    }
+    if(in->standby)
+        in->standby = false;
+
+    pthread_mutex_lock(&st_dev->lock);
+    st_info = get_sound_trigger_info(in->capture_handle);
+    pthread_mutex_unlock(&st_dev->lock);
+    if (st_info) {
+        event.u.aud_info.ses_info = &st_info->st_ses;
+        event.u.aud_info.buf = buffer;
+        event.u.aud_info.num_bytes = bytes;
+        ret = st_dev->st_callback(AUDIO_EVENT_READ_SAMPLES, &event);
+    }
+
+exit:
+    if (ret) {
+        if (-ENETRESET == ret)
+            in->is_st_session_active = false;
+        memset(buffer, 0, bytes);
+        ALOGV("%s: read failed status %d - sleep", __func__, ret);
+        usleep((bytes * 1000000) / (audio_stream_in_frame_size((struct audio_stream_in *)in) *
+                                   in->config.rate));
+    }
+    return ret;
+}
+
 void audio_extn_sound_trigger_stop_lab(struct stream_in *in)
 {
-    int status = 0;
     struct sound_trigger_info  *st_ses_info = NULL;
     audio_event_info_t event;
 
-    if (!st_dev || !in)
+    if (!st_dev || !in || !in->is_st_session_active)
        return;
 
     pthread_mutex_lock(&st_dev->lock);
@@ -142,8 +212,9 @@ void audio_extn_sound_trigger_stop_lab(struct stream_in *in)
     pthread_mutex_unlock(&st_dev->lock);
     if (st_ses_info) {
         event.u.ses_info = st_ses_info->st_ses;
-        ALOGV("%s: AUDIO_EVENT_STOP_LAB pcm %p", __func__, st_ses_info->st_ses.pcm);
+        ALOGV("%s: AUDIO_EVENT_STOP_LAB st sess %p", __func__, st_ses_info->st_ses.p_ses);
         st_dev->st_callback(AUDIO_EVENT_STOP_LAB, &event);
+        in->is_st_session_active = false;
     }
 }
 void audio_extn_sound_trigger_check_and_get_session(struct stream_in *in)
@@ -161,10 +232,10 @@ void audio_extn_sound_trigger_check_and_get_session(struct stream_in *in)
     list_for_each(node, &st_dev->st_ses_list) {
         st_ses_info = node_to_item(node, struct sound_trigger_info , list);
         if (st_ses_info->st_ses.capture_handle == in->capture_handle) {
-            in->pcm = st_ses_info->st_ses.pcm;
             in->config = st_ses_info->st_ses.config;
             in->channel_mask = audio_channel_in_mask_from_count(in->config.channels);
             in->is_st_session = true;
+            in->is_st_session_active = true;
             ALOGD("%s: capture_handle %d is sound trigger", __func__, in->capture_handle);
             break;
         }
@@ -293,13 +364,45 @@ void audio_extn_sound_trigger_set_parameters(struct audio_device *adev __unused,
         event.u.value = val;
         st_dev->st_callback(AUDIO_EVENT_NUM_ST_SESSIONS, &event);
     }
+
+    ret = str_parms_get_int(params, AUDIO_PARAMETER_DEVICE_CONNECT, &val);
+    if ((ret >= 0) && audio_is_input_device(val)) {
+        event.u.value = val;
+        st_dev->st_callback(AUDIO_EVENT_DEVICE_CONNECT, &event);
+    }
+
+    ret = str_parms_get_int(params, AUDIO_PARAMETER_DEVICE_DISCONNECT, &val);
+    if ((ret >= 0) && audio_is_input_device(val)) {
+        event.u.value = val;
+        st_dev->st_callback(AUDIO_EVENT_DEVICE_DISCONNECT, &event);
+    }
+
+    ret = str_parms_get_str(params, "SVA_EXEC_MODE", value, sizeof(value));
+    if (ret >= 0) {
+        strlcpy(event.u.str_value, value, sizeof(event.u.str_value));
+        st_dev->st_callback(AUDIO_EVENT_SVA_EXEC_MODE, &event);
+    }
+}
+
+void audio_extn_sound_trigger_get_parameters(const struct audio_device *adev __unused,
+                       struct str_parms *query, struct str_parms *reply)
+{
+    audio_event_info_t event;
+    int ret;
+    char value[32];
+
+    ret = str_parms_get_str(query, "SVA_EXEC_MODE_STATUS", value,
+                                                  sizeof(value));
+    if (ret >= 0) {
+        st_dev->st_callback(AUDIO_EVENT_SVA_EXEC_MODE_STATUS, &event);
+        str_parms_add_int(reply, "SVA_EXEC_MODE_STATUS", event.u.value);
+    }
 }
 
 int audio_extn_sound_trigger_init(struct audio_device *adev)
 {
     int status = 0;
     char sound_trigger_lib[100];
-    void *lib_handle;
 
     ALOGI("%s: Enter", __func__);
 
@@ -310,10 +413,7 @@ int audio_extn_sound_trigger_init(struct audio_device *adev)
         return -ENOMEM;
     }
 
-    snprintf(sound_trigger_lib, sizeof(sound_trigger_lib),
-             "/system/vendor/lib/hw/sound_trigger.primary.%s.so",
-              XSTR(SOUND_TRIGGER_PLATFORM_NAME));
-
+    get_library_path(sound_trigger_lib);
     st_dev->lib_handle = dlopen(sound_trigger_lib, RTLD_NOW);
 
     if (st_dev->lib_handle == NULL) {
@@ -335,6 +435,7 @@ int audio_extn_sound_trigger_init(struct audio_device *adev)
 
     st_dev->adev = adev;
     list_init(&st_dev->st_ses_list);
+    audio_extn_snd_mon_register_listener(st_dev, stdev_snd_mon_cb);
 
     return 0;
 
@@ -351,6 +452,7 @@ void audio_extn_sound_trigger_deinit(struct audio_device *adev)
 {
     ALOGI("%s: Enter", __func__);
     if (st_dev && (st_dev->adev == adev) && st_dev->lib_handle) {
+        audio_extn_snd_mon_unregister_listener(st_dev);
         dlclose(st_dev->lib_handle);
         free(st_dev);
         st_dev = NULL;
